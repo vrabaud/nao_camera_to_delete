@@ -46,9 +46,13 @@
 #include <image_transport/image_transport.h>
 #include <sensor_msgs/CameraInfo.h>
 
-#include "dev_camera1394.h"
-#include "camera1394/Camera1394Config.h"
-typedef camera1394::Camera1394Config Config;
+// Aldebaran includes
+#include <alproxies/alvideodeviceproxy.h>
+
+#include "nao_node.h"
+
+#include "nao_camera/NaoCameraConfig.h"
+typedef naocamera::NaoCameraConfig Config;
 
 /** @file
 
@@ -56,17 +60,31 @@ typedef camera1394::Camera1394Config Config;
 
 */
 
-namespace camera1394_driver
+namespace naocamera_driver
 {
 
-class Camera1394Driver
+  //! Macro for defining an exception with a given parent
+  //  (std::runtime_error should be top parent)
+  // code borrowed from drivers/laser/hokuyo_driver/hokuyo.h
+#define DEF_EXCEPTION(name, parent)		\
+  class name  : public parent {			\
+  public:					\
+    name (const char* msg) : parent (msg) {}	\
+  }
+
+  //! A standard NaoCamera exception
+  DEF_EXCEPTION(Exception, std::runtime_error);
+
+
+class NaoCameraDriver : public NaoNode
 {
 public:
 
   // public methods
-  Camera1394Driver(ros::NodeHandle priv_nh,
-                   ros::NodeHandle camera_nh);
-  ~Camera1394Driver();
+  NaoCameraDriver(int argc, char ** argv,
+                  ros::NodeHandle priv_nh,
+                  ros::NodeHandle camera_nh);
+  ~NaoCameraDriver();
   void poll(void);
   void setup(void);
   void shutdown(void);
@@ -78,7 +96,7 @@ private:
   bool openCamera(Config &newconfig);
   void publish(const sensor_msgs::ImagePtr &image);
   bool read(sensor_msgs::ImagePtr &image);
-  void reconfig(camera1394::Camera1394Config &newconfig, uint32_t level);
+  void reconfig(naocamera::NaoCameraConfig &newconfig, uint32_t level);
 
   /** Non-recursive mutex for serializing callbacks with device polling. */
   boost::mutex mutex_;
@@ -92,12 +110,13 @@ private:
   ros::Rate cycle_;                     // polling rate when closed
   uint32_t retries_;                    // count of openCamera() retries
 
-  /** libdc1394 camera device interface */
-  boost::shared_ptr<camera1394::Camera1394> dev_;
+
+  /** NAOqi proxy **/
+  boost::shared_ptr<AL::ALVideoDeviceProxy> cameraProxy;
 
   /** dynamic parameter configuration */
-  camera1394::Camera1394Config config_;
-  dynamic_reconfigure::Server<camera1394::Camera1394Config> srv_;
+  naocamera::NaoCameraConfig config_;
+  dynamic_reconfigure::Server<naocamera::NaoCameraConfig> srv_;
 
   /** camera calibration information */
   boost::shared_ptr<camera_info_manager::CameraInfoManager> cinfo_;
@@ -113,6 +132,6 @@ private:
   double topic_diagnostics_max_freq_;
   diagnostic_updater::TopicDiagnostic topic_diagnostics_;
 
-}; // end class Camera1394Driver
+}; // end class NaoCameraDriver
 
-}; // end namespace camera1394_driver
+}; // end namespace naocamera_driver

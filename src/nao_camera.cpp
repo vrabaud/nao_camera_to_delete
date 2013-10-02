@@ -35,12 +35,27 @@
 #include <boost/format.hpp>
 
 #include <driver_base/SensorLevels.h>
+#include <sensor_msgs/image_encodings.h>
 #include <tf/transform_listener.h>
 
-#include "driver1394.h"
-#include "camera1394/Camera1394Config.h"
-#include "features.h"
+// Aldebaran includes
+#include <alproxies/almemoryproxy.h>
+#include <alvision/alvisiondefinitions.h>
+#include <alerror/alerror.h>
+#include <alvalue/alvalue.h>
+#include <alcommon/altoolsmain.h>
+#include <alproxies/alvideodeviceproxy.h>
+#include <alcommon/albroker.h>
+#include <alcommon/albrokermanager.h>
+#include <alcommon/alproxy.h>
+#include <alproxies/alproxies.h>
+#include <alcommon/almodule.h>
 
+
+
+#include "nao_camera/NaoCameraConfig.h"
+
+#include "nao_camera.h"
 /** @file
 
 @brief ROS driver for IIDC-compatible IEEE 1394 digital cameras.
@@ -59,15 +74,19 @@ pipeline similar to the other ROS camera drivers.
 
 */
 
-namespace camera1394_driver
+using namespace AL;
+
+namespace naocamera_driver
 {
   // some convenience typedefs
-  typedef camera1394::Camera1394Config Config;
+  typedef naocamera::NaoCameraConfig Config;
   typedef driver_base::Driver Driver;
   typedef driver_base::SensorLevels Levels;
 
-  Camera1394Driver::Camera1394Driver(ros::NodeHandle priv_nh,
-                                     ros::NodeHandle camera_nh):
+  NaoCameraDriver::NaoCameraDriver(int argc, char ** argv,
+                                   ros::NodeHandle priv_nh,
+                                   ros::NodeHandle camera_nh):
+    NaoNode(argc, argv),
     state_(Driver::CLOSED),
     reconfiguring_(false),
     priv_nh_(priv_nh),
@@ -75,7 +94,6 @@ namespace camera1394_driver
     camera_name_("camera"),
     cycle_(1.0),                        // slow poll when closed
     retries_(0),
-    dev_(new camera1394::Camera1394()),
     srv_(priv_nh),
     cinfo_(new camera_info_manager::CameraInfoManager(camera_nh_)),
     calibration_matches_(true),
@@ -85,25 +103,33 @@ namespace camera1394_driver
     topic_diagnostics_min_freq_(0.),
     topic_diagnostics_max_freq_(1000.),
     topic_diagnostics_("image_raw", diagnostics_,
-		       diagnostic_updater::FrequencyStatusParam
-		       (&topic_diagnostics_min_freq_,
-			&topic_diagnostics_max_freq_, 0.1, 10),
-		       diagnostic_updater::TimeStampStatusParam())
-  {}
+                diagnostic_updater::FrequencyStatusParam
+                    (&topic_diagnostics_min_freq_,
+                     &topic_diagnostics_max_freq_, 0.1, 10),
+                diagnostic_updater::TimeStampStatusParam())
+  {
+    if ( !connectNaoQi() )
+    {
+      // TODO: retry the connection?
+      ROS_ERROR("Could not connect to NAOqi! Make sure NAOqi is running and you passed the right host/port.");
+      throw naocamera_driver::Exception("Connection to NAOqi failed");
+    }
 
-  Camera1394Driver::~Camera1394Driver()
+  }
+
+  NaoCameraDriver::~NaoCameraDriver()
   {}
 
   /** Close camera device
    *
    *  postcondition: state_ is Driver::CLOSED
    */
-  void Camera1394Driver::closeCamera()
+  void NaoCameraDriver::closeCamera()
   {
     if (state_ != Driver::CLOSED)
       {
         ROS_INFO_STREAM("[" << camera_name_ << "] closing device");
-        dev_->close();
+        //TODO NAOqi
         state_ = Driver::CLOSED;
       }
   }
@@ -120,39 +146,42 @@ namespace camera1394_driver
    *   camera_name_ set to GUID string
    *   GUID configuration parameter updated
    */
-  bool Camera1394Driver::openCamera(Config &newconfig)
+  bool NaoCameraDriver::openCamera(Config &newconfig)
   {
     bool success = false;
 
     try
-      {
-        if (0 == dev_->open(newconfig))
-          {
-            if (camera_name_ != dev_->device_id_)
-              {
-                camera_name_ = dev_->device_id_;
-                if (!cinfo_->setCameraName(camera_name_))
-                  {
-                    // GUID is 16 hex digits, which should be valid.
-                    // If not, use it for log messages anyway.
-                    ROS_WARN_STREAM("[" << camera_name_
-                                    << "] name not valid"
-                                    << " for camera_info_manger");
-                  }
-              }
-            ROS_INFO_STREAM("[" << camera_name_ << "] opened: "
-                            << newconfig.video_mode << ", "
-                            << newconfig.frame_rate << " fps, "
-                            << newconfig.iso_speed << " Mb/s");
-            state_ = Driver::OPENED;
-            calibration_matches_ = true;
-            newconfig.guid = camera_name_; // update configuration parameter
-            retries_ = 0;
-            success = true;
-          }
-      }
-    catch (camera1394::Exception& e)
-      {
+    {
+        cameraProxy = boost::shared_ptr<ALVideoDeviceProxy>(new ALVideoDeviceProxy(m_broker));
+
+        camera_name_ = cameraProxy->subscribeCamera(
+                                    camera_name_, 
+                                    kTopCamera,
+                                    kQVGA,
+                                    kBGRColorSpace,
+                                    20); //FPS
+
+        if (!cinfo_->setCameraName(camera_name_))
+        {
+            // GUID is 16 hex digits, which should be valid.
+            // If not, use it for log messages anyway.
+            ROS_WARN_STREAM("[" << camera_name_
+                            << "] name not valid"
+                            << " for camera_info_manger");
+        }
+
+        ROS_INFO_STREAM("[" << camera_name_ << "] opened: "
+                        << newconfig.video_mode << ", "
+                        << newconfig.frame_rate << " fps, "
+                        << newconfig.iso_speed << " Mb/s");
+        state_ = Driver::OPENED;
+        calibration_matches_ = true;
+        newconfig.guid = camera_name_; // update configuration parameter
+        retries_ = 0;
+        success = true;
+    }
+    catch (const ALError& e)
+    {
         state_ = Driver::CLOSED;    // since the open() failed
         if (retries_++ > 0)
           ROS_DEBUG_STREAM("[" << camera_name_
@@ -161,7 +190,7 @@ namespace camera1394_driver
         else
           ROS_ERROR_STREAM("[" << camera_name_
                            << "] device open failed: " << e.what());
-      }
+    }
 
     // update diagnostics parameters
     diagnostics_.setHardwareID(camera_name_);
@@ -174,7 +203,7 @@ namespace camera1394_driver
 
 
   /** device poll */
-  void Camera1394Driver::poll(void)
+  void NaoCameraDriver::poll(void)
   {
     // Do not run concurrently with reconfig().
     //
@@ -218,7 +247,7 @@ namespace camera1394_driver
    *
    *  @param image points to latest camera frame
    */
-  void Camera1394Driver::publish(const sensor_msgs::ImagePtr &image)
+  void NaoCameraDriver::publish(const sensor_msgs::ImagePtr &image)
   {
     image->header.frame_id = config_.frame_id;
 
@@ -227,7 +256,7 @@ namespace camera1394_driver
       ci(new sensor_msgs::CameraInfo(cinfo_->getCameraInfo()));
 
     // check whether CameraInfo matches current video mode
-    if (!dev_->checkCameraInfo(*image, *ci))
+    if (image->width == ci->width && image->height == ci->height)
       {
         // image size does not match: publish a matching uncalibrated
         // CameraInfo instead
@@ -252,7 +281,8 @@ namespace camera1394_driver
       }
 
     // fill in operational parameters
-    dev_->setOperationalParameters(*ci);
+    //TODO NAOqi
+    //dev_->setOperationalParameters(*ci);
 
     ci->header.frame_id = config_.frame_id;
     ci->header.stamp = image->header.stamp;
@@ -271,17 +301,52 @@ namespace camera1394_driver
    * @param image points to camera Image message
    * @return true if successful, with image filled in
    */
-  bool Camera1394Driver::read(sensor_msgs::ImagePtr &image)
+  bool NaoCameraDriver::read(sensor_msgs::ImagePtr &image)
   {
     bool success = true;
     try
       {
         // Read data from the Camera
         ROS_DEBUG_STREAM("[" << camera_name_ << "] reading data");
-        success = dev_->readData(*image);
+        //TODO: use getImageLocal on the robot!
+        ALValue al_image = cameraProxy->getImageRemote(camera_name_);
+
+        if (config_.use_ros_time)
+            image->header.stamp = ros::Time::now();
+        else { 
+            // use NAOqi timestamp
+            image->header.stamp = ros::Time(((double) al_image[4] / 1000000.0) + (double) al_image[5]);
+        }
+
+        image->width = (int) al_image[0];
+        image->height = (int) al_image[1];
+        image->step = image->width * (int) al_image[2];
+
+        switch ((int) al_image[3]) {
+            case kYUVColorSpace:
+                image->encoding = sensor_msgs::image_encodings::MONO8;
+                break;
+            case kRGBColorSpace:
+                image->encoding = sensor_msgs::image_encodings::RGB8;
+                break;
+            case kBGRColorSpace:
+                image->encoding = sensor_msgs::image_encodings::BGR8;
+                break;
+            default:
+                ROS_ERROR_STREAM("Unknown encoding for NAOqi frame: " << (int) al_image[3]);
+        }
+
+        int image_size = image->height * image->step;
+        image->data.resize(image_size);
+        const unsigned char* capture_buffer = static_cast<const unsigned char*>(al_image[6].GetBinary());
+        memcpy(&(image->data)[0], 
+                capture_buffer,
+                image_size);
+
+        success = true;
         ROS_DEBUG_STREAM("[" << camera_name_ << "] read returned");
       }
-    catch (camera1394::Exception& e)
+    catch (naocamera_driver::Exception& e)
       {
         ROS_WARN_STREAM("[" << camera_name_
                         << "] Exception reading data: " << e.what());
@@ -299,7 +364,7 @@ namespace camera1394_driver
    *  @param level bit-wise OR of reconfiguration levels for all
    *               changed parameters (0xffffffff on initial call)
    **/
-  void Camera1394Driver::reconfig(Config &newconfig, uint32_t level)
+  void NaoCameraDriver::reconfig(Config &newconfig, uint32_t level)
   {
     // Do not run concurrently with poll().  Tell it to stop running,
     // and wait on the lock until it does.
@@ -346,19 +411,24 @@ namespace camera1394_driver
         if (level & Levels::RECONFIGURE_CLOSE)
           {
             // initialize all features for newly opened device
+            //TODO NAOqi
+            /*
             if (false == dev_->features_->initialize(&newconfig))
               {
                 ROS_ERROR_STREAM("[" << camera_name_
                                  << "] feature initialization failure");
                 closeCamera();          // can't continue
               }
+            */
           }
         else
           {
             // update any features that changed
             // TODO replace this with a direct call to
             //   Feature::reconfigure(&newconfig);
-            dev_->features_->reconfigure(&newconfig);
+            
+            //TODO NAOqi
+            //dev_->features_->reconfigure(&newconfig);
           }
       }
 
@@ -377,16 +447,16 @@ namespace camera1394_driver
    *  immediately with level 0xffffffff.  The reconfig() method will
    *  set initial parameter values, then open the device if it can.
    */
-  void Camera1394Driver::setup(void)
+  void NaoCameraDriver::setup(void)
   {
-    srv_.setCallback(boost::bind(&Camera1394Driver::reconfig, this, _1, _2));
+    srv_.setCallback(boost::bind(&NaoCameraDriver::reconfig, this, _1, _2));
   }
 
 
   /** driver termination */
-  void Camera1394Driver::shutdown(void)
+  void NaoCameraDriver::shutdown(void)
   {
     closeCamera();
   }
 
-}; // end namespace camera1394_driver
+}; // end namespace naocamera_driver

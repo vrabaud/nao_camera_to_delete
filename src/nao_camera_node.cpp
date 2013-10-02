@@ -1,10 +1,7 @@
-/* -*- mode: C++ -*- */
-/* $Id$ */
-
 /*********************************************************************
 * Software License Agreement (BSD License)
 *
-*  Copyright (c) 2010 Ken Tossell, Jack O'Quin
+*  Copyright (c) 2013 Séverin Lemaignan
 *  All rights reserved.
 *
 *  Redistribution and use in source and binary forms, with or without
@@ -35,75 +32,32 @@
 *  POSSIBILITY OF SUCH DAMAGE.
 *********************************************************************/
 
-#ifndef _FORMAT7_H_
-#define _FORMAT7_H_
+#include <ros/ros.h>
 
-#include <sensor_msgs/CameraInfo.h>
-#include <sensor_msgs/Image.h>
-
-#include <dc1394/dc1394.h>
-
-#include "camera1394/Camera1394Config.h"
-typedef camera1394::Camera1394Config Config;
+#include "nao_camera.h"
 
 /** @file
 
-    @brief Camera1394 Format7 interface
+    @brief ROS driver node for cameras available through NAOqi middleware.
 
-    @author Ken Tossell, Jack O'Quin
- */
+*/
 
-/*** @brief Camera1394 Format7 class
- *
- *   Sets CameraInfo Format7 data from Config updates.  Tracks values
- *   and ranges, modifying configured values to those supported by the
- *   device.
- *
- */
-class Format7
+/** Main node entry point. */
+int main(int argc, char **argv)
 {
-public:
+  ros::init(argc, argv, "naocamera_node");
+  ros::NodeHandle node;
+  ros::NodeHandle priv_nh("~");
+  ros::NodeHandle camera_nh("camera");
+  naocamera_driver::NaoCameraDriver dvr(argc, argv, priv_nh, camera_nh);
 
-  Format7():
-    active_(false),
-    coding_(DC1394_COLOR_CODING_MONO8),
-    maxWidth_(0),
-    maxHeight_(0),
-    binning_x_(0),
-    binning_y_(0),
-    BayerPattern_((dc1394color_filter_t) DC1394_COLOR_FILTER_NUM)
-  {};
-  ~Format7() {};
+  dvr.setup();
+  while (node.ok())
+    {
+      dvr.poll();
+      ros::spinOnce();
+    }
+  dvr.shutdown();
 
-  /** Format7 mode currently started */
-  bool active(void)
-  {
-    return active_;
-  }
-  bool start(dc1394camera_t *camera, dc1394video_mode_t mode,
-             Config &newconfig);
-  void stop(void);
-  void unpackData(sensor_msgs::Image &image, uint8_t *capture_buffer);
-  bool checkCameraInfo(const sensor_msgs::CameraInfo &cinfo);
-  void setOperationalParameters(sensor_msgs::CameraInfo &cinfo);
-
-private:
-  dc1394color_filter_t findBayerPattern(const char* bayer);
-
-  bool active_;
-  dc1394color_coding_t coding_;
-  uint32_t maxWidth_;
-  uint32_t maxHeight_;
-
-  /** currently configured region of interest */
-  sensor_msgs::RegionOfInterest roi_;
-
-  /** current Format7 video mode binning */
-  uint32_t binning_x_;
-  uint32_t binning_y_;
-
-  /** order of pixels in raw image format */
-  dc1394color_filter_t BayerPattern_;
-};
-
-#endif // _FORMAT7_H_
+  return 0;
+}
