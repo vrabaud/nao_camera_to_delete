@@ -405,19 +405,36 @@ namespace naocamera_driver
         closeCamera();                  // state_ --> CLOSED
     }
 
-    if (config_.camera_info_url != newconfig.camera_info_url)
+    if (newconfig.source == kTopCamera)
+    {
+      if (config_.camera_info_url_top != newconfig.camera_info_url_top)
       {
         // set the new URL and load CameraInfo (if any) from it
-        if (cinfo_->validateURL(newconfig.camera_info_url))
+        if (cinfo_->validateURL(newconfig.camera_info_url_top))
           {
-            cinfo_->loadCameraInfo(newconfig.camera_info_url);
+            cinfo_->loadCameraInfo(newconfig.camera_info_url_top);
           }
         else
           {
             // new URL not valid, use the old one
-            newconfig.camera_info_url = config_.camera_info_url;
+            newconfig.camera_info_url_top = config_.camera_info_url_top;
           }
       }
+    } else {
+      if (config_.camera_info_url_bottom != newconfig.camera_info_url_bottom)
+      {
+        // set the new URL and load CameraInfo (if any) from it
+        if (cinfo_->validateURL(newconfig.camera_info_url_bottom))
+          {
+            cinfo_->loadCameraInfo(newconfig.camera_info_url_bottom);
+          }
+        else
+          {
+            // new URL not valid, use the old one
+            newconfig.camera_info_url_bottom = config_.camera_info_url_bottom;
+          }
+      }
+    }
 
     if (state_ != Driver::CLOSED)       // openCamera() succeeded?
     {
@@ -473,9 +490,14 @@ namespace naocamera_driver
 
     reconfiguring_ = false;             // let poll() run again
 
-    ROS_DEBUG_STREAM("[" << camera_name_
+    if (newconfig.source == kTopCamera)
+      ROS_DEBUG_STREAM("[" << camera_name_
                      << "] reconfigured: frame_id " << frame_id_
-                     << ", camera_info_url " << newconfig.camera_info_url);
+                     << ", camera_info_url_top " << newconfig.camera_info_url_top);
+    else
+      ROS_DEBUG_STREAM("[" << camera_name_
+                     << "] reconfigured: frame_id " << frame_id_
+                     << ", camera_info_url_bottom " << newconfig.camera_info_url_bottom);
   }
 
 
